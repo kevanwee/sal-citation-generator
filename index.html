@@ -1,3 +1,28 @@
 <!DOCTYPE html>
+<html>
+<head>
+    <title>SAL Citation Generator</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Source Toggle -->
+        <div class="source-toggle">
+            <button id="elitigationBtn" class="active">eLitigation</button>
+            <button id="otherBtn">Other Source</button>
+        </div>
 
+        <!-- Input Section -->
+        <div class="input-group">
+            <input type="text" id="citationInput" placeholder="Paste eLitigation case URL">
+            <button onclick="handleInput()">Add Citation</button>
+        </div>
+
+        <!-- Footnotes List -->
+        <div id="footnotesList" class="footnotes-list"></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+    <script src="main.js"></script>
+</body>
 </html>
