@@ -1,0 +1,63 @@
+.container {
+    max-width: 800px;
+    margin: 20px auto;
+    padding: 20px;
+}
+
+.source-toggle button {
+    padding: 8px 15px;
+    margin-right: 10px;
+    border: 1px solid #007bff;
+    background: white;
+    cursor: pointer;
+}
+
+.source-toggle button.active {
+    background: #007bff;
+    color: white;
+}
+
+.input-group {
+    margin: 20px 0;
+}
+
+.input-group input {
+    width: 400px;
+    padding: 8px;
+}
+
+.footnote {
+    margin: 10px 0;
+    padding: 15px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+.drag-handle {
+    cursor: move;
+    margin-right: 10px;
+    padding: 2px 8px;
+    background: #f0f0f0;
+    border-radius: 50%;
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    text-align: center;
+    line-height: 18px;
+}
+
+.citation-output {
+    margin-top: 10px;
+    margin-left: 15px;
+    color: #666;
+    display: block;
+    line-height: 1.5;
+}
+
+.italic {
+    font-style: italic;
+}
+
+.case-name-input {
+    font-style: italic;
+}
