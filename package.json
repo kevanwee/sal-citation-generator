@@ -1,0 +1,9 @@
+{
+  "name": "sal-citation-generator",
+  "version": "1.0.0",
+  "description": "Client-side citation helper for SAL/SLR-aligned Singapore case citations.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

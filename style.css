@@ -1,63 +1,202 @@
+:root {
+    --bg: #f5f7fb;
+    --card: #ffffff;
+    --border: #d5dbe6;
+    --primary: #144f9c;
+    --primary-strong: #093773;
+    --danger: #9f1d35;
+    --text: #132033;
+    --muted: #5e6676;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    background: linear-gradient(160deg, #f9fbff 0%, #edf2fb 100%);
+    color: var(--text);
+    font-family: "Segoe UI", Arial, sans-serif;
+}
+
 .container {
-    max-width: 800px;
-    margin: 20px auto;
-    padding: 20px;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 24px 16px 48px;
+}
+
+h1 {
+    margin: 0;
+    font-size: 2rem;
+}
+
+.subtitle {
+    margin-top: 10px;
+    margin-bottom: 20px;
+    color: var(--muted);
+}
+
+.source-toggle {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
 }
 
 .source-toggle button {
-    padding: 8px 15px;
-    margin-right: 10px;
-    border: 1px solid #007bff;
-    background: white;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card);
+    color: var(--text);
     cursor: pointer;
 }
 
 .source-toggle button.active {
-    background: #007bff;
-    color: white;
+    background: var(--primary);
+    color: #fff;
+    border-color: var(--primary);
 }
 
 .input-group {
-    margin: 20px 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 6px;
 }
 
 .input-group input {
-    width: 400px;
-    padding: 8px;
+    flex: 1 1 420px;
+    min-width: 260px;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+}
+
+button {
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card);
+    cursor: pointer;
+}
+
+#addCitationBtn,
+#copyAllBtn,
+#clearAllBtn {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+#addCitationBtn:hover,
+#copyAllBtn:hover,
+#clearAllBtn:hover {
+    color: #fff;
+    background: var(--primary-strong);
+    border-color: var(--primary-strong);
+}
+
+.status-message {
+    margin: 0 0 14px;
+    min-height: 22px;
+    color: var(--muted);
+}
+
+.status-message[data-kind="error"] {
+    color: var(--danger);
+}
+
+.status-message[data-kind="success"] {
+    color: #165d2f;
 }
 
 .footnote {
-    margin: 10px 0;
-    padding: 15px;
-    border: 1px solid #ddd;
-    border-radius: 4px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 14px;
+    padding: 14px;
+    box-shadow: 0 4px 12px rgba(7, 20, 51, 0.05);
+}
+
+.footnote-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
 }
 
 .drag-handle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     cursor: move;
-    margin-right: 10px;
-    padding: 2px 8px;
-    background: #f0f0f0;
-    border-radius: 50%;
-    display: inline-block;
-    width: 18px;
-    height: 18px;
-    text-align: center;
-    line-height: 18px;
+    font-weight: 700;
+    background: #eef2fa;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    width: 30px;
+    height: 30px;
+}
+
+.danger-btn {
+    border-color: var(--danger);
+    color: var(--danger);
+    background: #fff;
+}
+
+.danger-btn:hover {
+    background: var(--danger);
+    color: #fff;
+}
+
+.field-grid {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+label {
+    display: flex;
+    flex-direction: column;
+    font-size: 0.86rem;
+    color: var(--muted);
+    gap: 4px;
+}
+
+input {
+    padding: 8px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    color: var(--text);
+    background: #fff;
 }
 
 .citation-output {
-    margin-top: 10px;
-    margin-left: 15px;
-    color: #666;
-    display: block;
+    margin: 12px 0 0;
+    border-top: 1px dashed var(--border);
+    padding-top: 10px;
     line-height: 1.5;
+    color: var(--text);
+}
+
+.empty {
+    padding: 16px;
+    border: 1px dashed var(--border);
+    border-radius: 10px;
+    color: var(--muted);
 }
 
 .italic {
     font-style: italic;
 }
 
-.case-name-input {
-    font-style: italic;
+@media (max-width: 640px) {
+    .container {
+        padding: 18px 12px 32px;
+    }
+
+    h1 {
+        font-size: 1.7rem;
+    }
 }

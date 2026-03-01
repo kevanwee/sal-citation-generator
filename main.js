@@ -1,230 +1,259 @@
+import {
+  computeCitationOutputs,
+  createCaseFootnoteFromElitigation,
+  createTextFootnote,
+  parseElitigationUrl,
+} from "./citationEngine.js";
+
+const STORAGE_KEY = "sal-citation-generator:v2";
 let footnotes = [];
 let isElitigation = true;
+let sortableInstance = null;
 
-// Toggle handlers
-document.getElementById('elitigationBtn').addEventListener('click', () => {
-    isElitigation = true;
-    document.getElementById('citationInput').placeholder = "Paste eLitigation case URL";
-    toggleActiveState(true);
-});
+const elements = {
+  elitigationBtn: document.getElementById("elitigationBtn"),
+  otherBtn: document.getElementById("otherBtn"),
+  citationInput: document.getElementById("citationInput"),
+  addCitationBtn: document.getElementById("addCitationBtn"),
+  clearAllBtn: document.getElementById("clearAllBtn"),
+  copyAllBtn: document.getElementById("copyAllBtn"),
+  statusMessage: document.getElementById("statusMessage"),
+  footnotesList: document.getElementById("footnotesList"),
+};
 
-document.getElementById('otherBtn').addEventListener('click', () => {
-    isElitigation = false;
-    document.getElementById('citationInput').placeholder = "Enter manual citation";
-    toggleActiveState(false);
-});
-
-function toggleActiveState(isElit) {
-    document.getElementById('elitigationBtn').classList.toggle('active', isElit);
-    document.getElementById('otherBtn').classList.toggle('active', !isElit);
+function saveState() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(footnotes));
 }
 
-function handleInput() {
-    const input = document.getElementById('citationInput').value.trim();
-    if (!input) return;
-
-    if (isElitigation) {
-        const parsed = parseElitigationUrl(input);
-        if (parsed) {
-            footnotes.push({
-                ...parsed,
-                type: 'elitigation'
-            });
-            updateDisplay();
-            document.getElementById('citationInput').value = '';
-        } else {
-            alert("Invalid eLitigation URL format. Example: https://www.elitigation.sg/gd/s/2023_SGCA_5");
-        }
-    } else {
-        const newFootnote = {
-            text: input,
-            type: 'other'
-        };
-        footnotes.push(newFootnote);
-        updateDisplay();
-        document.getElementById('citationInput').value = '';
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      return [];
     }
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
-function parseElitigationUrl(url) {
-    const regex = /(\d{4})_SG([A-Z]+)_(\d+)/i;
-    const match = url.match(regex);
+function showStatus(message, kind = "info") {
+  elements.statusMessage.textContent = message;
+  elements.statusMessage.dataset.kind = kind;
+}
 
-    if (match) {
-        return {
-            caseName: '',
-            year: match[1],
-            court: 'SG' + match[2].toUpperCase(),
-            caseNo: match[3],
-            paraStart: '',
-            paraEnd: ''
-        };
+function escapeAttribute(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function toggleActiveState(elitigationMode) {
+  elements.elitigationBtn.classList.toggle("active", elitigationMode);
+  elements.otherBtn.classList.toggle("active", !elitigationMode);
+  elements.citationInput.placeholder = elitigationMode
+    ? "Paste eLitigation case URL (eg, https://www.elitigation.sg/gd/s/2023_SGCA_5)"
+    : "Enter manual citation text";
+}
+
+function handleModeChange(elitigationMode) {
+  isElitigation = elitigationMode;
+  toggleActiveState(elitigationMode);
+}
+
+function addFootnoteFromInput() {
+  const input = elements.citationInput.value.trim();
+  if (!input) {
+    showStatus("Please enter a citation input.", "warn");
+    return;
+  }
+
+  if (isElitigation) {
+    const parsed = parseElitigationUrl(input);
+    if (!parsed) {
+      showStatus(
+        "Could not parse URL. Expected a neutral citation segment like 2023_SGCA_5.",
+        "error",
+      );
+      return;
     }
-    return null;
+    footnotes.push(createCaseFootnoteFromElitigation(parsed));
+    showStatus("Added eLitigation citation stub. Fill in case details below.", "success");
+  } else {
+    footnotes.push(createTextFootnote(input));
+    showStatus("Added manual citation text.", "success");
+  }
+
+  elements.citationInput.value = "";
+  render();
 }
 
-function updateDisplay() {
-    const list = document.getElementById('footnotesList');
-    list.innerHTML = '';
-
-    footnotes.forEach((fn, index) => {
-        const div = document.createElement('div');
-        div.className = 'footnote';
-
-        if (fn.type === 'elitigation') {
-            // eLitigation format with italicized case name
-            div.innerHTML = `
-                <span class="drag-handle">${index + 1}</span>
-                <input class="case-name-input" value="${fn.caseName}" onchange="updateElitigationField(${index}, 'caseName', this.value)" style="width: 250px;">
-                [<input value="${fn.year}" onchange="updateElitigationField(${index}, 'year', this.value)" size="4">]
-                <input value="${fn.court}" onchange="updateElitigationField(${index}, 'court', this.value)" size="4">
-                <input value="${fn.caseNo}" onchange="updateElitigationField(${index}, 'caseNo', this.value)" size="3">
-                at [<input value="${fn.paraStart || ''}" onchange="updateElitigationField(${index}, 'paraStart', this.value)" size="2">] -
-                [<input value="${fn.paraEnd || ''}" onchange="updateElitigationField(${index}, 'paraEnd', this.value)" size="2">]
-                <span class="citation-output"></span>
-            `;
-        } else {
-            // Other format - just a simple text field
-            div.innerHTML = `
-                <span class="drag-handle">${index + 1}</span>
-                <input value="${fn.text}" onchange="updateOtherField(${index}, 'text', this.value)" style="width: 100%;">
-                <span class="citation-output"></span>
-            `;
-        }
-
-        list.appendChild(div);
-    });
-
-    applyAllRules();
-    initSortable();
+function removeFootnote(index) {
+  footnotes.splice(index, 1);
+  render();
 }
 
-function updateElitigationField(index, field, value) {
-    footnotes[index][field] = value;
-    updateDisplay();
+function clearAllFootnotes() {
+  footnotes = [];
+  render();
+  showStatus("All citations cleared.", "info");
 }
 
-function updateOtherField(index, field, value) {
-    footnotes[index][field] = value;
-    updateDisplay();
+async function copyAllCitations() {
+  const outputs = computeCitationOutputs(footnotes).map((entry, index) => `${index + 1}. ${entry.text}`);
+  if (!outputs.length) {
+    showStatus("No citations available to copy.", "warn");
+    return;
+  }
+
+  await navigator.clipboard.writeText(outputs.join("\n"));
+  showStatus("Citations copied to clipboard.", "success");
 }
 
-function formatElitigationCitation(fn) {
-    let citation = `<span class="italic">${fn.caseName || ''}</span> [${fn.year}] ${fn.court} ${fn.caseNo}`;
-    
-    // Apply paragraph logic
-    if (fn.paraStart) {
-        if (fn.paraEnd && fn.paraStart !== fn.paraEnd) {
-            citation += ` at [${fn.paraStart}] - [${fn.paraEnd}]`;
-        } else {
-            citation += ` at [${fn.paraStart}]`;
-        }
-    }
-
-    // Add final period
-    return citation + '.';
+function createCaseCard(note, index, outputHtml) {
+  return `
+    <article class="footnote">
+      <div class="footnote-header">
+        <span class="drag-handle" title="Drag to reorder">${index + 1}</span>
+        <button type="button" class="danger-btn" data-action="remove" data-index="${index}">Remove</button>
+      </div>
+      <div class="field-grid">
+        <label>Case name
+          <input data-index="${index}" data-field="caseName" value="${escapeAttribute(note.caseName)}" placeholder="eg, Tan Kim Seng v Victor Adam Ibrahim">
+        </label>
+        <label>Short name (for supra)
+          <input data-index="${index}" data-field="shortName" value="${escapeAttribute(note.shortName)}" placeholder="eg, Tan Kim Seng">
+        </label>
+        <label>SLR/report citation (preferred if available)
+          <input data-index="${index}" data-field="reportCitation" value="${escapeAttribute(note.reportCitation)}" placeholder="eg, [2002] 3 SLR(R) 345">
+        </label>
+        <label>Year
+          <input data-index="${index}" data-field="year" value="${escapeAttribute(note.year)}" placeholder="YYYY">
+        </label>
+        <label>Court
+          <input data-index="${index}" data-field="court" value="${escapeAttribute(note.court)}" placeholder="SGCA / SGHC / SGHCF">
+        </label>
+        <label>Case No
+          <input data-index="${index}" data-field="caseNo" value="${escapeAttribute(note.caseNo)}" placeholder="5">
+        </label>
+        <label>Pinpoint start paragraph
+          <input data-index="${index}" data-field="paraStart" value="${escapeAttribute(note.paraStart)}" placeholder="eg, 12">
+        </label>
+        <label>Pinpoint end paragraph
+          <input data-index="${index}" data-field="paraEnd" value="${escapeAttribute(note.paraEnd)}" placeholder="optional">
+        </label>
+      </div>
+      <p class="citation-output">${outputHtml}</p>
+    </article>
+  `;
 }
 
-function formatOtherCitation(fn) {
-    // Make sure there's only one period at the end
-    let text = fn.text || '';
-    text = text.replace(/\.+$/, ''); // Remove any trailing periods
-    return text + '.';
+function createTextCard(note, index, outputHtml) {
+  return `
+    <article class="footnote">
+      <div class="footnote-header">
+        <span class="drag-handle" title="Drag to reorder">${index + 1}</span>
+        <button type="button" class="danger-btn" data-action="remove" data-index="${index}">Remove</button>
+      </div>
+      <label>Manual citation
+        <input data-index="${index}" data-field="text" value="${escapeAttribute(note.text)}" placeholder="Enter citation text">
+      </label>
+      <p class="citation-output">${outputHtml}</p>
+    </article>
+  `;
 }
-
-function getCitationKey(fn) {
-    if (fn.type === 'elitigation') {
-        // Include paragraph numbers in the key to ensure exact matching
-        return `${fn.caseName}-${fn.year}-${fn.court}-${fn.caseNo}-${fn.paraStart || ''}-${fn.paraEnd || ''}`;
-    }
-    return fn.text;
-}
-
-function applyAllRules() {
-    // First pass: map citation keys to their first occurrence index
-    const firstOccurrence = {};
-    
-    footnotes.forEach((fn, index) => {
-        // Create a base citation key without paragraph info for Id checking
-        if (fn.type === 'elitigation') {
-            const baseKey = `${fn.caseName}-${fn.year}-${fn.court}-${fn.caseNo}`;
-            if (firstOccurrence[baseKey] === undefined) {
-                firstOccurrence[baseKey] = index;
-            }
-        }
-        
-        // Also track the full citation key for Supra references
-        const fullKey = getCitationKey(fn);
-        if (firstOccurrence[fullKey] === undefined) {
-            firstOccurrence[fullKey] = index;
-        }
-    });
-    
-    // Second pass: apply Ibid/Id and Supra rules
-    const outputSpans = document.querySelectorAll('.citation-output');
-    
-    footnotes.forEach((fn, index) => {
-        if (index === 0 || fn.type !== 'elitigation') {
-            // Handle first or non-elitigation citations
-            if (fn.type === 'elitigation') {
-                outputSpans[index].innerHTML = formatElitigationCitation(fn);
-            } else {
-                outputSpans[index].innerHTML = formatOtherCitation(fn);
-            }
-            return;
-        }
-        
-        const prev = footnotes[index - 1];
-        
-        // Check for same case but ignore paragraph numbers
-        const sameCaseAsPrevious = prev.type === 'elitigation' && 
-                                  fn.caseName === prev.caseName && 
-                                  fn.year === prev.year && 
-                                  fn.court === prev.court && 
-                                  fn.caseNo === prev.caseNo;
-        
-        if (sameCaseAsPrevious) {
-            // Same case, check paragraphs
-            if (fn.paraStart === prev.paraStart && fn.paraEnd === prev.paraEnd) {
-                // Same paragraphs = Ibid
-                outputSpans[index].innerHTML = '<span class="italic">Ibid</span>.';
-            } else {
-                // Different paragraphs = Id at [x]
-                let idText = '<span class="italic">Id</span> at';
-                if (fn.paraStart) {
-                    if (fn.paraEnd && fn.paraStart !== fn.paraEnd) {
-                        idText += ` [${fn.paraStart}] - [${fn.paraEnd}]`;
-                    } else {
-                        idText += ` [${fn.paraStart}]`;
-                    }
-                }
-                outputSpans[index].innerHTML = idText + '.';
-            }
-        } else {
-            // Not the same as previous case, check for Supra
-            const fullKey = getCitationKey(fn);
-            const firstIndex = firstOccurrence[fullKey];
-            
-            if (firstIndex !== undefined && firstIndex < index) {
-                // This exact citation appeared earlier
-                outputSpans[index].innerHTML = `<span class="italic">Supra</span> n ${firstIndex + 1}.`;
-            } else {
-                // First occurrence of this citation
-                outputSpans[index].innerHTML = formatElitigationCitation(fn);
-            }
-        }
-    });
-}
-
 
 function initSortable() {
-    new Sortable(document.getElementById('footnotesList'), {
-        animation: 150,
-        handle: '.drag-handle',
-        onEnd: (evt) => {
-            const movedItem = footnotes.splice(evt.oldIndex, 1)[0];
-            footnotes.splice(evt.newIndex, 0, movedItem);
-            updateDisplay();
-        }
-    });
+  if (sortableInstance) {
+    sortableInstance.destroy();
+  }
+
+  sortableInstance = new Sortable(elements.footnotesList, {
+    animation: 150,
+    handle: ".drag-handle",
+    onEnd: (event) => {
+      const moved = footnotes.splice(event.oldIndex, 1)[0];
+      footnotes.splice(event.newIndex, 0, moved);
+      render();
+    },
+  });
 }
+
+function render() {
+  const outputs = computeCitationOutputs(footnotes);
+  const html = footnotes
+    .map((note, index) =>
+      note.type === "case"
+        ? createCaseCard(note, index, outputs[index].html)
+        : createTextCard(note, index, outputs[index].html),
+    )
+    .join("");
+
+  elements.footnotesList.innerHTML = html || "<p class=\"empty\">No citations yet.</p>";
+  saveState();
+
+  if (footnotes.length) {
+    initSortable();
+  } else if (sortableInstance) {
+    sortableInstance.destroy();
+    sortableInstance = null;
+  }
+}
+
+function handleListChange(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement)) {
+    return;
+  }
+
+  const index = Number(target.dataset.index);
+  const field = target.dataset.field;
+  if (!Number.isInteger(index) || index < 0 || index >= footnotes.length || !field) {
+    return;
+  }
+
+  footnotes[index][field] = target.value;
+  render();
+}
+
+function handleListClick(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+
+  const action = target.dataset.action;
+  const index = Number(target.dataset.index);
+  if (action === "remove" && Number.isInteger(index)) {
+    removeFootnote(index);
+  }
+}
+
+function bootstrap() {
+  footnotes = loadState();
+  toggleActiveState(isElitigation);
+
+  elements.elitigationBtn.addEventListener("click", () => handleModeChange(true));
+  elements.otherBtn.addEventListener("click", () => handleModeChange(false));
+  elements.addCitationBtn.addEventListener("click", addFootnoteFromInput);
+  elements.clearAllBtn.addEventListener("click", clearAllFootnotes);
+  elements.copyAllBtn.addEventListener("click", () => {
+    copyAllCitations().catch(() => showStatus("Clipboard copy failed.", "error"));
+  });
+
+  elements.citationInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      addFootnoteFromInput();
+    }
+  });
+
+  elements.footnotesList.addEventListener("change", handleListChange);
+  elements.footnotesList.addEventListener("click", handleListClick);
+
+  render();
+}
+
+bootstrap();

@@ -1,28 +1,36 @@
 <!DOCTYPE html>
 <html>
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SAL Citation Generator</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="container">
+        <h1>SAL Citation Generator</h1>
+        <p class="subtitle">Singapore case citation helper with SAL-style short-form references (<span class="italic">Ibid</span>, <span class="italic">Id</span>, <span class="italic">supra</span>).</p>
+
         <!-- Source Toggle -->
         <div class="source-toggle">
-            <button id="elitigationBtn" class="active">eLitigation</button>
-            <button id="otherBtn">Other Source</button>
+            <button id="elitigationBtn" class="active" type="button">eLitigation URL</button>
+            <button id="otherBtn" type="button">Manual Text</button>
         </div>
 
         <!-- Input Section -->
         <div class="input-group">
             <input type="text" id="citationInput" placeholder="Paste eLitigation case URL">
-            <button onclick="handleInput()">Add Citation</button>
+            <button id="addCitationBtn" type="button">Add Citation</button>
+            <button id="copyAllBtn" type="button">Copy All</button>
+            <button id="clearAllBtn" type="button">Clear All</button>
         </div>
+        <p id="statusMessage" class="status-message" data-kind="info"></p>
 
         <!-- Footnotes List -->
         <div id="footnotesList" class="footnotes-list"></div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
-    <script src="main.js"></script>
+    <script type="module" src="main.js"></script>
 </body>
 </html>
