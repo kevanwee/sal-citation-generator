@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Citation engine outputs <span class="italic"> for case names */
+.italic {
+  font-style: italic;
+}
+
+/* Smooth scrollbar */
+html {
+  scroll-behavior: smooth;
+}
