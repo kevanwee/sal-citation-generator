@@ -1,25 +1,18 @@
-import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
-import './globals.css';
-
-const inter = Inter({
-  subsets: ['latin'],
-  variable: '--font-inter',
-  display: 'swap',
-});
-
+import type { Metadata } from "next";
+import "./globals.css";
 export const metadata: Metadata = {
-  title: 'SAL Citation Generator',
+  title: "SAL Citation — Your sources, in good form",
   description:
-    'Singapore case citation helper with SAL-style short-form references — Ibid, Id, and supra.',
+    "Build SAL academic footnotes for cases, legislation, books, chapters, journals and websites, with automatic repeat references and formatted export.",
 };
-
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
-    <html lang="en" className={inter.variable}>
-      <body className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50/30 font-sans text-slate-900 antialiased">
-        {children}
-      </body>
+    <html lang="en-SG">
+      <body>{children}</body>
     </html>
   );
 }
