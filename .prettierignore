@@ -1,0 +1,5 @@
+next-env.d.ts
+.audit/
+.next/
+node_modules/
+test-results/

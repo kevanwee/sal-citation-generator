@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   closestCenter,
-  KeyboardSensor,
   PointerSensor,
   useSensor,
   useSensors,
@@ -14,7 +13,6 @@ import {
   SortableContext,
   useSortable,
   verticalListSortingStrategy,
-  sortableKeyboardCoordinates,
   arrayMove,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -67,12 +65,13 @@ export default function CitationManager() {
   const importRef = useRef<HTMLInputElement>(null);
   const editorRef = useRef<HTMLHeadingElement>(null);
   const lookupSequence = useRef(0);
+  const sourceDrafts = useRef<
+    Partial<
+      Record<SourceType, { note: Footnote; editing: boolean; lookup: string }>
+    >
+  >({});
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-      scrollBehavior: "auto",
-    }),
   );
   const outputs = useMemo(
     () => computeCitationOutputs(workspace.footnotes, workspace.startNumber),
@@ -142,6 +141,7 @@ export default function CitationManager() {
     setWorkspace(next);
   }
   function fresh(type: SourceType, focus = false) {
+    delete sourceDrafts.current[type];
     lookupSequence.current++;
     setLookupBusy(false);
     setDraft(createFootnote(type));
@@ -150,6 +150,25 @@ export default function CitationManager() {
     setLookupMessage("");
     setLookupInput("");
     if (focus) setTimeout(() => editorRef.current?.focus(), 0);
+  }
+  function selectSource(type: SourceType) {
+    if (type === draft.type) return;
+    sourceDrafts.current[draft.type] = {
+      note: draft,
+      editing,
+      lookup: lookupInput,
+    };
+    const previous = sourceDrafts.current[type];
+    fresh(type);
+    if (
+      previous &&
+      (!previous.editing ||
+        workspace.footnotes.some((n) => n.id === previous.note.id))
+    ) {
+      setDraft(previous.note);
+      setEditing(previous.editing);
+      setLookupInput(previous.lookup);
+    }
   }
   function updateField(key: string, value: string) {
     setDraft((d) => ({ ...d, fields: { ...d.fields, [key]: value } }));
@@ -300,6 +319,7 @@ export default function CitationManager() {
       if (file.size > 5_000_000)
         throw Error("Choose a backup smaller than 5 MB.");
       const imported = parseWorkspace(await file.text());
+      sourceDrafts.current = {};
       change(imported);
       fresh("case");
       setStatus("Backup imported. Undo restores the previous workspace.");
@@ -386,6 +406,12 @@ export default function CitationManager() {
         {status ||
           "Build your footnotes in the order they appear in your manuscript."}
       </div>
+      {storageBlocked && (
+        <div className="notice persistent-storage-warning">
+          Automatic saving is paused. Use <strong>Back up</strong> to keep your
+          current footnotes before closing or reloading this page.
+        </div>
+      )}
       {recovery && (
         <div className="notice">
           Your original saved data is preserved.{" "}
@@ -403,6 +429,12 @@ export default function CitationManager() {
           </button>
         </div>
       )}
+      <nav className="mobile-workspace-nav" aria-label="Workspace sections">
+        <a href="#editor-heading">Source editor</a>
+        <a href="#footnotes-heading">
+          Footnotes ({workspace.footnotes.length}) ↓
+        </a>
+      </nav>
       <div className="workspace-grid" aria-busy={!ready}>
         <aside className="source-nav" aria-label="Source types">
           <p className="eyebrow">ADD A SOURCE</p>
@@ -412,7 +444,7 @@ export default function CitationManager() {
               className={`source-option ${draft.type === s.type ? "active" : ""}`}
               aria-label={s.label}
               aria-pressed={draft.type === s.type}
-              onClick={() => fresh(s.type)}
+              onClick={() => selectSource(s.type)}
               disabled={!ready || lookupBusy}
             >
               <span className="source-mark">{s.mark}</span>
@@ -501,6 +533,10 @@ export default function CitationManager() {
             )}
             <p className="form-note">
               Fields marked <span aria-hidden="true">*</span> are required.
+            </p>
+            <p className="form-note">
+              Add the footnote or save changes to keep these details in your
+              workspace.
             </p>
             <fieldset disabled={!ready || lookupBusy} className="fields-grid">
               <legend className="sr-only">{source.label} details</legend>
@@ -756,7 +792,7 @@ export default function CitationManager() {
               accessibility={{
                 announcements: {
                   onDragStart: ({ active }) =>
-                    `Picked up footnote ${workspace.startNumber + workspace.footnotes.findIndex((n) => n.id === active.id)}. Use the arrow keys to move.`,
+                    `Picked up footnote ${workspace.startNumber + workspace.footnotes.findIndex((n) => n.id === active.id)}.`,
                   onDragOver: ({ over }) =>
                     over
                       ? `Moving over footnote ${workspace.startNumber + workspace.footnotes.findIndex((n) => n.id === over.id)}.`
@@ -961,8 +997,15 @@ function FootnoteRow({
             className="drag-handle"
             {...attributes}
             {...listeners}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+                event.preventDefault();
+                onMove(event.key === "ArrowUp" ? -1 : 1);
+              }
+            }}
+            aria-roledescription="Reorder control. Use Up and Down arrow keys."
             aria-label={`Reorder footnote ${number}`}
-            title="Drag, or press Space then arrow keys to reorder"
+            title="Drag, or use Up and Down arrow keys to reorder"
           >
             ⠿
           </button>

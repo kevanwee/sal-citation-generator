@@ -256,3 +256,37 @@ test("lookup extracts only a matching judgment header, never citations in the bo
   assert.equal(extractCaseName(html, "[2023] SGCA 5"), "A v B & C");
   assert.equal(extractCaseName(html, "[2024] SGCA 5"), null);
 });
+
+test("edited books and secondary-source supra retain title formatting", () => {
+  const book = note("book", {
+    title: "Cross and Tapper on Evidence",
+    author: "Colin Tapper",
+    publisher: "Butterworths",
+    edition: "9th Ed",
+    year: "1999",
+    shortAuthor: "Tapper",
+    shortName: "Evidence",
+    pinpoint: "74",
+  });
+  const out = compute([
+    book,
+    note("text", { text: "An intervening footnote" }),
+    { ...book, fields: { ...book.fields, pinpoint: "80" } },
+  ]);
+  assert.equal(out[2].text, "Tapper, Evidence, supra n 1, at p 80.");
+  assert.match(out[2].html, /<i>Evidence<\/i>/);
+  const edited = note("book", {
+    title: "Benjamin’s Sale of Goods",
+    editor: "A G Guest gen ed",
+    publisher: "Sweet & Maxwell",
+    edition: "6th Ed",
+    year: "2002",
+    pinpointType: "paragraph",
+    pinpoint: "10-039",
+  });
+  assert.equal(validateFootnote(edited).length, 0);
+  assert.equal(
+    compute([edited])[0].text,
+    "Benjamin’s Sale of Goods (A G Guest gen ed) (Sweet & Maxwell, 6th Ed, 2002) at para 10-039.",
+  );
+});

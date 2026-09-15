@@ -297,6 +297,9 @@ main {
   align-items: start;
   gap: 22px;
 }
+.mobile-workspace-nav {
+  display: none;
+}
 .source-nav {
   padding: 14px 0;
 }
@@ -985,6 +988,21 @@ main {
   }
 }
 @media (max-width: 680px) {
+  html {
+    scroll-padding-top: 65px;
+  }
+  .mobile-workspace-nav {
+    display: flex;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: var(--paper);
+    border-bottom: 1px solid var(--line);
+    padding: 12px 3px;
+    margin-bottom: 15px;
+    font-size: 12px;
+  }
   main {
     padding: 0 18px;
   }

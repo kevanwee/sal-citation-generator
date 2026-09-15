@@ -117,6 +117,7 @@ function identity(note: Footnote): string {
       : `case:neutral:${f.year}|${clean(f.court).toUpperCase()}|${normNumber(f.caseNo)}`;
   const excluded = new Set([
     "shortName",
+    "shortAuthor",
     "pinpoint",
     "pinpointEnd",
     "pinpointType",
@@ -154,7 +155,7 @@ function full(note: Footnote): { text: string; html: string } {
         .filter(Boolean)
         .join(" ") + (f.shortName ? ` (“${em(f.shortName)}”)` : "");
   } else if (note.type === "legislation") {
-    text = `${f.title}${f.reference ? ` (${f.reference})` : ""}`;
+    text = `${f.title}${f.reference ? ` (${f.reference.replace(/^\(|\)$/g, "")})` : ""}${f.shortName ? ` (“${f.shortName}”)` : ""}`;
     html = escapeHtml(text);
   } else if (note.type === "book") {
     const suffix = `${f.editor ? ` (${f.editor})` : ""}${f.volume ? ` vol ${f.volume}` : ""} (${publication})`;
@@ -214,17 +215,25 @@ export function computeCitationOutputs(
       };
     }
     const f = notes[original].fields;
-    const name =
-      clean(f.shortName) ||
-      (note.type === "case"
-        ? clean(f.caseName)
-        : note.type === "legislation"
-          ? clean(f.title)
-          : `${clean(f.author)}${f.author ? ", " : ""}${clean(f.title)}`);
+    let name: string, nameHtml: string;
+    if (note.type === "case" || note.type === "legislation") {
+      name =
+        clean(f.shortName) ||
+        clean(note.type === "case" ? f.caseName : f.title);
+      nameHtml = note.type === "case" ? em(name) : escapeHtml(name);
+    } else {
+      const author = clean(f.shortAuthor) || clean(f.author);
+      const prefix = author ? `${author}, ` : "";
+      const title = clean(f.shortName) || clean(f.title);
+      name = `${prefix}${note.type === "book" ? title : `“${title}”`}`;
+      nameHtml =
+        escapeHtml(prefix) +
+        (note.type === "book" ? em(title) : escapeHtml(`“${title}”`));
+    }
     const suffix = ` n ${original + startNumber}${p ? `, ${p}` : ""}.`;
     return {
       text: `${name}, supra${suffix}`,
-      html: `${note.type === "case" ? em(name) : escapeHtml(name)}, <i>supra</i>${escapeHtml(suffix)}`,
+      html: `${nameHtml}, <i>supra</i>${escapeHtml(suffix)}`,
       kind: "supra",
       issues,
     };

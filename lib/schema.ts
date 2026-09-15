@@ -36,7 +36,21 @@ const short = field(
   "Short reference",
   "",
   false,
-  "For later references. For books/articles, use author surname and an abbreviated title where needed.",
+  "An abbreviated name to use in later references.",
+);
+const shortTitle = field(
+  "shortName",
+  "Short title",
+  "",
+  false,
+  "An optional abbreviated title for later references.",
+);
+const shortAuthor = field(
+  "shortAuthor",
+  "Author short form",
+  "",
+  false,
+  "Author surname(s) for later references. Full names are retained if omitted.",
 );
 export const sourceTypes: {
   type: SourceType;
@@ -98,14 +112,15 @@ export const fields: Record<SourceType, Field[]> = {
     ),
   ],
   book: [
-    author,
+    { ...author, required: false },
     title,
     field("editor", "Editor / translator", "A G Guest gen ed"),
     publisher,
     edition,
     year,
     field("volume", "Volume", "5"),
-    short,
+    shortAuthor,
+    shortTitle,
   ],
   chapter: [
     author,
@@ -121,7 +136,8 @@ export const fields: Record<SourceType, Field[]> = {
     edition,
     year,
     field("chapter", "Chapter number", "6"),
-    short,
+    shortAuthor,
+    shortTitle,
   ],
   journal: [
     author,
@@ -140,7 +156,8 @@ export const fields: Record<SourceType, Field[]> = {
     field("volume", "Volume / issue", "23"),
     field("journal", "Journal abbreviation", "UWALR", true),
     field("firstPage", "First page", "195", true),
-    short,
+    shortAuthor,
+    shortTitle,
   ],
   website: [
     field("author", "Author / institution", "National Heritage Board"),
@@ -149,7 +166,8 @@ export const fields: Record<SourceType, Field[]> = {
     field("date", "Publication date", "4 July 2003"),
     field("url", "Source URL", "https://example.org/article", true),
     field("accessed", "Access date", "23 April 2004", true),
-    short,
+    shortAuthor,
+    shortTitle,
   ],
   text: [
     field(
