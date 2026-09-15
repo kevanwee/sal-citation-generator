@@ -31,3 +31,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Local source guides and audit scratch files
+/.audit/
+/*Style_Guide*.pdf
+/test-results/
+/playwright-report/
