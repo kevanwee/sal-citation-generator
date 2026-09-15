@@ -1,26 +1,20 @@
-export interface CaseFootnote {
+﻿export type SourceType =
+  "case" | "legislation" | "book" | "chapter" | "journal" | "website" | "text";
+export interface Footnote {
   id: string;
-  type: 'case';
-  source?: 'elitigation' | 'manual';
-  caseName: string;
-  shortName: string;
-  reportCitation: string;
-  year: string;
-  court: string;
-  caseNo: string;
-  paraStart: string;
-  paraEnd: string;
+  sourceId: string;
+  type: SourceType;
+  fields: Record<string, string>;
 }
-
-export interface TextFootnote {
-  id: string;
-  type: 'text';
-  text: string;
-}
-
-export type Footnote = CaseFootnote | TextFootnote;
-
 export interface CitationOutput {
   html: string;
   text: string;
+  kind: "full" | "ibid" | "id" | "supra" | "manual";
+  issues: string[];
+}
+export interface Workspace {
+  version: 3;
+  title: string;
+  startNumber: number;
+  footnotes: Footnote[];
 }

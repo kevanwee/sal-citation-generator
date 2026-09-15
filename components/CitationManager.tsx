@@ -1,6 +1,6 @@
-'use client';
+"use client";
 
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   closestCenter,
@@ -8,397 +8,1068 @@ import {
   useSensor,
   useSensors,
   type DragEndEvent,
-} from '@dnd-kit/core';
+} from "@dnd-kit/core";
 import {
   SortableContext,
+  useSortable,
   verticalListSortingStrategy,
   arrayMove,
-} from '@dnd-kit/sortable';
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import {
   computeCitationOutputs,
   parseElitigationUrl,
-  createCaseFootnoteFromElitigation,
-  createTextFootnote,
-} from '@/lib/citationEngine';
-import type { Footnote, CaseFootnote, TextFootnote } from '@/lib/types';
-import CaseCard from './CaseCard';
-import TextCard from './TextCard';
-
-const STORAGE_KEY = 'sal-citation-generator:v2';
-
-type StatusKind = 'info' | 'success' | 'error' | 'warn';
-
-interface Status {
-  message: string;
-  kind: StatusKind;
-}
-
-function generateId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-}
-
-function loadState(): Footnote[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return (parsed as Record<string, unknown>[]).map((item) => ({
-      ...item,
-      id: typeof item['id'] === 'string' ? item['id'] : generateId(),
-    })) as Footnote[];
-  } catch {
-    return [];
-  }
-}
+  validateFootnote,
+} from "@/lib/citationEngine";
+import { createFootnote, fields, sourceTypes } from "@/lib/schema";
+import {
+  emptyWorkspace,
+  LEGACY_KEY,
+  parseWorkspace,
+  STORAGE_KEY,
+  updateFootnote,
+} from "@/lib/workspace";
+import {
+  copyCitations,
+  downloadFile,
+  exportHtml,
+  exportText,
+} from "@/lib/export";
+import type {
+  CitationOutput,
+  Footnote,
+  SourceType,
+  Workspace,
+} from "@/lib/types";
 
 export default function CitationManager() {
-  const [footnotes, setFootnotes] = useState<Footnote[]>(() => {
-    if (typeof window === 'undefined') return [];
-    return loadState();
-  });
-  const [mode, setMode] = useState<'elitigation' | 'manual'>('elitigation');
-  const [inputValue, setInputValue] = useState('');
-  const [status, setStatus] = useState<Status | null>(null);
-
+  const [workspace, setWorkspace] = useState<Workspace>(emptyWorkspace);
+  const [ready, setReady] = useState(false);
+  const [saveState, setSaveState] = useState("Loading workspace…");
+  const [storageBlocked, setStorageBlocked] = useState(false);
+  const [recovery, setRecovery] = useState("");
+  const [status, setStatus] = useState("");
+  const [history, setHistory] = useState<Workspace[]>([]);
+  const [draft, setDraft] = useState<Footnote>(() => ({
+    id: "draft",
+    sourceId: "draft",
+    type: "case",
+    fields: {},
+  }));
+  const [editing, setEditing] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [lookupInput, setLookupInput] = useState("");
+  const [lookupBusy, setLookupBusy] = useState(false);
+  const [lookupMessage, setLookupMessage] = useState("");
+  const [preview, setPreview] = useState(false);
+  const importRef = useRef<HTMLInputElement>(null);
+  const editorRef = useRef<HTMLHeadingElement>(null);
+  const lookupSequence = useRef(0);
+  const sourceDrafts = useRef<
+    Partial<
+      Record<SourceType, { note: Footnote; editing: boolean; lookup: string }>
+    >
+  >({});
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
   );
-
-  const outputs = useMemo(() => computeCitationOutputs(footnotes), [footnotes]);
+  const outputs = useMemo(
+    () => computeCitationOutputs(workspace.footnotes, workspace.startNumber),
+    [workspace],
+  );
+  const invalid = outputs.filter((o) => o.issues.length).length;
+  const draftOutput = useMemo(
+    () => computeCitationOutputs([draft])[0],
+    [draft],
+  );
+  const source = sourceTypes.find((s) => s.type === draft.type)!;
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(footnotes));
-  }, [footnotes]);
-
-  const showStatus = useCallback((message: string, kind: StatusKind = 'info') => {
-    setStatus({ message, kind });
+    setDraft(createFootnote("case"));
+    try {
+      const raw =
+        localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_KEY);
+      if (raw) {
+        try {
+          setWorkspace(parseWorkspace(raw));
+        } catch {
+          setRecovery(raw);
+          setStorageBlocked(true);
+          setStatus(
+            "Saved data could not be opened. Download the original below, or import a valid backup. The original has been preserved.",
+          );
+        }
+      }
+    } catch {
+      setStorageBlocked(true);
+      setStatus(
+        "Browser storage is unavailable. You can keep working and download a backup.",
+      );
+    }
+    setReady(true);
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === STORAGE_KEY) {
+        setStorageBlocked(true);
+        setStatus(
+          "This workspace changed in another tab. Automatic saving is paused. Back up your changes before reloading to use the other tab’s version.",
+        );
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, []);
-
-  function handleAdd() {
-    const input = inputValue.trim();
-    if (!input) {
-      showStatus('Please enter a citation input.', 'warn');
+  useEffect(() => {
+    if (!ready) return;
+    if (storageBlocked) {
+      setSaveState("Not saved · download a backup");
       return;
     }
-
-    if (mode === 'elitigation') {
-      const parsed = parseElitigationUrl(input);
-      if (!parsed) {
-        showStatus(
-          'Could not parse URL. Expected a neutral citation like 2023_SGCA_5.',
-          'error',
-        );
-        return;
-      }
-      const newNote: CaseFootnote = {
-        ...(createCaseFootnoteFromElitigation(parsed) as Omit<CaseFootnote, 'id'>),
-        id: generateId(),
-      };
-      setFootnotes((prev) => [...prev, newNote]);
-      showStatus('Added eLitigation citation stub — fill in case details below.', 'success');
-    } else {
-      const newNote: TextFootnote = {
-        ...(createTextFootnote(input) as Omit<TextFootnote, 'id'>),
-        id: generateId(),
-      };
-      setFootnotes((prev) => [...prev, newNote]);
-      showStatus('Added manual citation text.', 'success');
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(workspace));
+      setSaveState("Saved in this browser");
+    } catch {
+      setStorageBlocked(true);
+      setSaveState("Not saved · download a backup");
+      setStatus(
+        "The browser could not save your workspace. Download a backup to protect your work.",
+      );
     }
-    setInputValue('');
-  }
+  }, [workspace, ready, storageBlocked]);
 
-  function handleRemove(id: string) {
-    setFootnotes((prev) => prev.filter((f) => f.id !== id));
+  function change(next: Workspace) {
+    setHistory((h) => [...h.slice(-29), workspace]);
+    setWorkspace(next);
   }
-
-  function handleUpdate(id: string, field: string, value: string) {
-    setFootnotes((prev) =>
-      prev.map((f) => (f.id === id ? { ...f, [field]: value } : f)),
+  function fresh(type: SourceType, focus = false) {
+    delete sourceDrafts.current[type];
+    lookupSequence.current++;
+    setLookupBusy(false);
+    setDraft(createFootnote(type));
+    setEditing(false);
+    setSubmitted(false);
+    setLookupMessage("");
+    setLookupInput("");
+    if (focus) setTimeout(() => editorRef.current?.focus(), 0);
+  }
+  function selectSource(type: SourceType) {
+    if (type === draft.type) return;
+    sourceDrafts.current[draft.type] = {
+      note: draft,
+      editing,
+      lookup: lookupInput,
+    };
+    const previous = sourceDrafts.current[type];
+    fresh(type);
+    if (
+      previous &&
+      (!previous.editing ||
+        workspace.footnotes.some((n) => n.id === previous.note.id))
+    ) {
+      setDraft(previous.note);
+      setEditing(previous.editing);
+      setLookupInput(previous.lookup);
+    }
+  }
+  function updateField(key: string, value: string) {
+    setDraft((d) => ({ ...d, fields: { ...d.fields, [key]: value } }));
+  }
+  function submit() {
+    setSubmitted(true);
+    if (validateFootnote(draft).length) {
+      setStatus("Complete the required source details before saving.");
+      return;
+    }
+    if (!editing && workspace.footnotes.length >= 2000) {
+      setStatus(
+        "This workspace has reached 2,000 footnotes. Start a new manuscript after saving a backup.",
+      );
+      return;
+    }
+    change({
+      ...workspace,
+      footnotes: updateFootnote(
+        editing ? workspace.footnotes : [...workspace.footnotes, draft],
+        draft,
+      ),
+    });
+    setStatus(
+      editing
+        ? "Source updated. Linked references have been recalculated."
+        : `Footnote ${workspace.startNumber + workspace.footnotes.length} added.`,
+    );
+    fresh(draft.type);
+  }
+  function edit(note: Footnote) {
+    lookupSequence.current++;
+    setLookupBusy(false);
+    setDraft({ ...note, fields: { ...note.fields } });
+    setEditing(true);
+    setSubmitted(false);
+    setLookupMessage("");
+    setTimeout(() => editorRef.current?.focus(), 0);
+  }
+  function repeat(note: Footnote) {
+    edit({ ...note, id: crypto.randomUUID() });
+    setEditing(false);
+    setStatus(
+      "Reusing this source. Adjust the pinpoint, then add the footnote. Source details remain linked.",
     );
   }
-
-  function handleClear() {
-    setFootnotes([]);
-    showStatus('All citations cleared.', 'info');
+  function remove(id: string) {
+    change({
+      ...workspace,
+      footnotes: workspace.footnotes.filter((n) => n.id !== id),
+    });
+    if (draft.id === id) fresh(draft.type);
+    setStatus("Footnote removed. Undo is available.");
   }
-
-  async function handleCopyAll() {
-    if (!footnotes.length) {
-      showStatus('No citations to copy.', 'warn');
+  function move(index: number, destination: number) {
+    if (destination < 0 || destination >= workspace.footnotes.length) return;
+    change({
+      ...workspace,
+      footnotes: arrayMove(workspace.footnotes, index, destination),
+    });
+    setStatus("Footnotes reordered. Cross-references updated.");
+  }
+  function dragEnd(event: DragEndEvent) {
+    if (event.over && event.active.id !== event.over.id)
+      move(
+        workspace.footnotes.findIndex((n) => n.id === event.active.id),
+        workspace.footnotes.findIndex((n) => n.id === event.over!.id),
+      );
+  }
+  function undo() {
+    const previous = history.at(-1);
+    if (previous) {
+      setWorkspace(previous);
+      setHistory((h) => h.slice(0, -1));
+      fresh(draft.type);
+      setStatus("Last workspace change undone.");
+    }
+  }
+  async function lookup() {
+    const parsed = parseElitigationUrl(lookupInput);
+    if (!parsed) {
+      setLookupMessage(
+        "Use an eLitigation URL or a citation such as [2023] SGCA 5.",
+      );
       return;
     }
-    const text = outputs.map((o, i) => `${i + 1}. ${o.text}`).join('\n');
+    const sequence = ++lookupSequence.current;
+    setDraft((d) => ({ ...d, fields: { ...d.fields, ...parsed } }));
+    setLookupBusy(true);
+    setLookupMessage("Retrieving the judgment header…");
     try {
-      await navigator.clipboard.writeText(text);
-      showStatus('Citations copied to clipboard.', 'success');
+      const response = await fetch(
+        `/api/elitigation?citation=${encodeURIComponent(`${parsed.year}_${parsed.court}_${parsed.caseNo}`)}`,
+        { signal: AbortSignal.timeout(15000) },
+      );
+      const data = await response.json();
+      if (sequence !== lookupSequence.current) return;
+      if (!response.ok)
+        throw Error(
+          data.error || "Lookup unavailable. Enter the case name manually.",
+        );
+      setDraft((d) => ({
+        ...d,
+        fields: {
+          ...d.fields,
+          caseName: data.caseName,
+          sourceUrl: data.sourceUrl,
+        },
+      }));
+      setLookupMessage(
+        "Case name retrieved. Check the source and add an SLR citation if reported.",
+      );
+    } catch (error) {
+      if (sequence === lookupSequence.current)
+        setLookupMessage(
+          error instanceof Error
+            ? error.message
+            : "Lookup unavailable. Enter details manually.",
+        );
+    } finally {
+      if (sequence === lookupSequence.current) setLookupBusy(false);
+    }
+  }
+  async function copy(index?: number) {
+    const selected = index === undefined ? outputs : [outputs[index]];
+    try {
+      const kind = await copyCitations(
+        selected,
+        index === undefined
+          ? workspace.startNumber
+          : workspace.startNumber + index,
+        index === undefined,
+      );
+      setStatus(
+        kind === "rich"
+          ? "Copied with italics. Paste into your document."
+          : "Copied as plain text. Use HTML export to retain italics.",
+      );
     } catch {
-      showStatus('Clipboard copy failed.', 'error');
+      setStatus(
+        "Clipboard access was blocked. Use the text or HTML download instead.",
+      );
     }
   }
-
-  function handleDragEnd(event: DragEndEvent) {
-    const { active, over } = event;
-    if (over && active.id !== over.id) {
-      setFootnotes((items) => {
-        const oldIndex = items.findIndex((i) => i.id === active.id);
-        const newIndex = items.findIndex((i) => i.id === over.id);
-        return arrayMove(items, oldIndex, newIndex);
-      });
+  async function importFile(file?: File) {
+    if (!file) return;
+    try {
+      if (file.size > 5_000_000)
+        throw Error("Choose a backup smaller than 5 MB.");
+      const imported = parseWorkspace(await file.text());
+      sourceDrafts.current = {};
+      change(imported);
+      fresh("case");
+      setStatus("Backup imported. Undo restores the previous workspace.");
+    } catch (error) {
+      setStatus(
+        error instanceof Error ? error.message : "Could not read this backup.",
+      );
     }
+    if (importRef.current) importRef.current.value = "";
   }
-
-  const placeholder =
-    mode === 'elitigation'
-      ? 'Paste eLitigation URL — e.g. https://www.elitigation.sg/gd/s/2023_SGCA_5'
-      : 'Enter manual citation text';
-
-  const statusColour =
-    status?.kind === 'success'
-      ? 'text-emerald-700'
-      : status?.kind === 'error'
-        ? 'text-red-600'
-        : status?.kind === 'warn'
-          ? 'text-amber-600'
-          : 'text-slate-500';
-
+  function example() {
+    const a = createFootnote("case");
+    a.fields = {
+      ...a.fields,
+      caseName: "Tan Kim Seng v Victor Adam Ibrahim",
+      shortName: "Tan Kim Seng",
+      year: "2003",
+      court: "SGCA",
+      caseNo: "49",
+      pinpoint: "10",
+    };
+    const b = { ...a, id: crypto.randomUUID(), fields: { ...a.fields } };
+    const c = {
+      ...a,
+      id: crypto.randomUUID(),
+      fields: { ...a.fields, pinpoint: "12" },
+    };
+    change({ ...workspace, footnotes: [a, b, c] });
+    setStatus(
+      "Example loaded from SAL C–1, with illustrative pinpoints. Edit or clear it to start your own list.",
+    );
+  }
+  const canExport = outputs.length > 0 && invalid === 0;
   return (
-    <div className="space-y-6">
-      {/* ── Input panel ─────────────────────────────────────────── */}
-      <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-card">
-        {/* Source toggle */}
-        <div className="mb-5 flex items-center gap-3">
-          <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-            Source
-          </span>
-          <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-1">
-            <ToggleBtn
-              active={mode === 'elitigation'}
-              onClick={() => setMode('elitigation')}
-            >
-              eLitigation URL
-            </ToggleBtn>
-            <ToggleBtn active={mode === 'manual'} onClick={() => setMode('manual')}>
-              Manual Text
-            </ToggleBtn>
-          </div>
-        </div>
-
-        {/* Input row */}
-        <div className="flex flex-wrap gap-2">
+    <>
+      <div className="workspace-bar">
+        <div className="manuscript-name">
+          <span className="eyebrow">YOUR MANUSCRIPT</span>
+          <label className="sr-only" htmlFor="manuscript-title">
+            Manuscript title
+          </label>
           <input
-            type="text"
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
-            placeholder={placeholder}
-            className="min-w-0 flex-1 basis-80 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+            id="manuscript-title"
+            maxLength={200}
+            value={workspace.title}
+            onChange={(e) =>
+              setWorkspace({ ...workspace, title: e.target.value })
+            }
           />
-          <button
-            type="button"
-            onClick={handleAdd}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 active:bg-blue-800"
-          >
-            <PlusIcon />
-            Add Citation
-          </button>
-          <button
-            type="button"
-            onClick={handleCopyAll}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200 focus:ring-offset-2"
-          >
-            <CopyIcon />
-            Copy All
-          </button>
-          <button
-            type="button"
-            onClick={handleClear}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200 focus:ring-offset-2"
-          >
-            Clear All
-          </button>
         </div>
-
-        {/* Status */}
-        {status && (
-          <p className={`mt-3 flex items-center gap-1.5 text-sm ${statusColour}`}>
-            <StatusIcon kind={status.kind} />
-            {status.message}
-          </p>
-        )}
-      </section>
-
-      {/* ── Footnote list ────────────────────────────────────────── */}
-      {footnotes.length === 0 ? (
-        <EmptyState />
-      ) : (
-        <div>
-          {/* Count bar */}
-          <div className="mb-3 flex items-center justify-between px-1">
-            <p className="text-sm font-medium text-slate-600">
-              {footnotes.length}&nbsp;
-              {footnotes.length === 1 ? 'footnote' : 'footnotes'}
-            </p>
-            <p className="flex items-center gap-1 text-xs text-slate-400">
-              <DragIndicatorIcon />
-              Drag to reorder
-            </p>
-          </div>
-
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleDragEnd}
+        <div className="workspace-actions">
+          <span className={`save-status ${storageBlocked ? "unsaved" : ""}`}>
+            <span aria-hidden="true">●</span> {saveState}
+          </span>
+          <button
+            className="button subtle"
+            onClick={() =>
+              downloadFile(
+                JSON.stringify(workspace, null, 2),
+                "sal-workspace.json",
+                "application/json",
+              )
+            }
           >
-            <SortableContext
-              items={footnotes.map((f) => f.id)}
-              strategy={verticalListSortingStrategy}
-            >
-              <div className="space-y-3">
-                {footnotes.map((footnote, index) =>
-                  footnote.type === 'case' ? (
-                    <CaseCard
-                      key={footnote.id}
-                      footnote={footnote}
-                      index={index}
-                      output={outputs[index]}
-                      onUpdate={handleUpdate}
-                      onRemove={handleRemove}
-                    />
-                  ) : (
-                    <TextCard
-                      key={footnote.id}
-                      footnote={footnote}
-                      index={index}
-                      output={outputs[index]}
-                      onUpdate={handleUpdate}
-                      onRemove={handleRemove}
-                    />
-                  ),
-                )}
-              </div>
-            </SortableContext>
-          </DndContext>
+            Back up
+          </button>
+          <button
+            className="button subtle"
+            onClick={() => importRef.current?.click()}
+          >
+            Import
+          </button>
+          <input
+            className="sr-only"
+            type="file"
+            accept=".json,application/json"
+            ref={importRef}
+            aria-label="Import workspace backup"
+            onChange={(e) => void importFile(e.target.files?.[0])}
+          />
+        </div>
+      </div>
+      <div className="status-message" role="status" aria-live="polite">
+        {status ||
+          "Build your footnotes in the order they appear in your manuscript."}
+      </div>
+      {storageBlocked && (
+        <div className="notice persistent-storage-warning">
+          Automatic saving is paused. Use <strong>Back up</strong> to keep your
+          current footnotes before closing or reloading this page.
         </div>
       )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Local sub-components
-// ---------------------------------------------------------------------------
-
-function ToggleBtn({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-md px-3 py-1.5 text-sm font-medium transition-all ${
-        active
-          ? 'bg-white text-blue-700 shadow-sm ring-1 ring-slate-200'
-          : 'text-slate-500 hover:text-slate-700'
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
-function EmptyState() {
-  return (
-    <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white/60 py-20 text-center">
-      <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 text-3xl">
-        ⚖️
+      {recovery && (
+        <div className="notice">
+          Your original saved data is preserved.{" "}
+          <button
+            className="text-button"
+            onClick={() =>
+              downloadFile(
+                recovery,
+                "sal-recovery-original.json",
+                "application/json",
+              )
+            }
+          >
+            Download original data
+          </button>
+        </div>
+      )}
+      <nav className="mobile-workspace-nav" aria-label="Workspace sections">
+        <a href="#editor-heading">Source editor</a>
+        <a href="#footnotes-heading">
+          Footnotes ({workspace.footnotes.length}) ↓
+        </a>
+      </nav>
+      <div className="workspace-grid" aria-busy={!ready}>
+        <aside className="source-nav" aria-label="Source types">
+          <p className="eyebrow">ADD A SOURCE</p>
+          {sourceTypes.map((s) => (
+            <button
+              key={s.type}
+              className={`source-option ${draft.type === s.type ? "active" : ""}`}
+              aria-label={s.label}
+              aria-pressed={draft.type === s.type}
+              onClick={() => selectSource(s.type)}
+              disabled={!ready || lookupBusy}
+            >
+              <span className="source-mark">{s.mark}</span>
+              {s.label}
+              <span className="source-arrow" aria-hidden="true">
+                ›
+              </span>
+            </button>
+          ))}
+          <div className="nav-note">
+            <span className="small-rule" />
+            <strong>Made for legal writing.</strong>
+            <p>
+              Source details in.
+              <br />
+              Consistent footnotes out.
+            </p>
+            <a href="#style-notes">About the citation rules ↗</a>
+          </div>
+        </aside>
+        <section className="editor-panel" aria-labelledby="editor-heading">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">
+                {editing ? "EDIT SOURCE" : "SOURCE DETAILS"}
+              </p>
+              <h2 id="editor-heading" ref={editorRef} tabIndex={-1}>
+                {editing ? "Edit " : ""}
+                {source.label}
+              </h2>
+            </div>
+            <span className="rule-chip">{source.rule}</span>
+          </div>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              submit();
+            }}
+            noValidate
+          >
+            {draft.type === "case" && (
+              <div className="lookup-box">
+                <label htmlFor="case-lookup">
+                  Start with a citation or URL
+                </label>
+                <div className="lookup-row">
+                  <input
+                    id="case-lookup"
+                    value={lookupInput}
+                    onChange={(e) => setLookupInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void lookup();
+                      }
+                    }}
+                    placeholder="[2023] SGCA 5 or eLitigation URL"
+                  />
+                  <button
+                    className="button dark"
+                    type="button"
+                    disabled={lookupBusy || !ready}
+                    onClick={() => void lookup()}
+                  >
+                    {lookupBusy ? "Looking up…" : "Look up"}
+                  </button>
+                </div>
+                <p>
+                  Retrieves the case name from eLitigation. You can also enter
+                  all details below.
+                </p>
+                <p role="status">{lookupMessage}</p>
+                {draft.fields.sourceUrl &&
+                  /^https:\/\/www\.elitigation\.sg\/gd\/s\/\d{4}_SG[A-Z]+_\d+$/.test(
+                    draft.fields.sourceUrl,
+                  ) && (
+                    <a
+                      target="_blank"
+                      rel="noreferrer"
+                      href={draft.fields.sourceUrl}
+                    >
+                      Open judgment ↗
+                    </a>
+                  )}
+              </div>
+            )}
+            <p className="form-note">
+              Fields marked <span aria-hidden="true">*</span> are required.
+            </p>
+            <p className="form-note">
+              Add the footnote or save changes to keep these details in your
+              workspace.
+            </p>
+            <fieldset disabled={!ready || lookupBusy} className="fields-grid">
+              <legend className="sr-only">{source.label} details</legend>
+              {fields[draft.type].map((f) => (
+                <label
+                  key={f.key}
+                  className={`field ${["caseName", "shortName", "title", "bookTitle", "text", "reportCitation", "reference", "url", "author"].includes(f.key) ? "wide" : ""}`}
+                >
+                  <span>
+                    {f.label}
+                    {f.required && <span className="required"> *</span>}
+                  </span>
+                  {f.options ? (
+                    <select
+                      aria-label={f.label}
+                      value={draft.fields[f.key] || f.options[0]}
+                      onChange={(e) => updateField(f.key, e.target.value)}
+                    >
+                      {f.options.map((o) => (
+                        <option key={o}>{o}</option>
+                      ))}
+                    </select>
+                  ) : f.key === "text" ? (
+                    <textarea
+                      aria-label={f.label}
+                      rows={5}
+                      value={draft.fields[f.key] || ""}
+                      onChange={(e) => updateField(f.key, e.target.value)}
+                      placeholder={f.placeholder}
+                      required={f.required}
+                      maxLength={20000}
+                    />
+                  ) : (
+                    <input
+                      aria-label={f.label}
+                      value={draft.fields[f.key] || ""}
+                      onChange={(e) => updateField(f.key, e.target.value)}
+                      placeholder={f.placeholder}
+                      required={f.required}
+                      maxLength={20000}
+                      aria-invalid={
+                        submitted && f.required && !draft.fields[f.key]?.trim()
+                          ? true
+                          : undefined
+                      }
+                    />
+                  )}{" "}
+                  {f.hint && <small>{f.hint}</small>}
+                </label>
+              ))}
+            </fieldset>
+            {!["legislation", "text", "website"].includes(draft.type) && (
+              <fieldset
+                className="pinpoint-fields"
+                disabled={!ready || lookupBusy}
+              >
+                <legend>
+                  Pinpoint <span>optional</span>
+                </legend>
+                {draft.type !== "case" && (
+                  <label className="field">
+                    <span>Pinpoint type</span>
+                    <select
+                      value={draft.fields.pinpointType || "page"}
+                      onChange={(e) =>
+                        updateField("pinpointType", e.target.value)
+                      }
+                    >
+                      <option value="page">Page</option>
+                      <option value="paragraph">Paragraph</option>
+                    </select>
+                  </label>
+                )}
+                <div className="fields-grid">
+                  <label className="field">
+                    <span>
+                      {draft.type === "case" ? "Paragraph" : "Pinpoint"} start
+                    </span>
+                    <input
+                      value={draft.fields.pinpoint || ""}
+                      onChange={(e) => updateField("pinpoint", e.target.value)}
+                      placeholder="e.g. 10"
+                    />
+                  </label>
+                  <label className="field">
+                    <span>End of range</span>
+                    <input
+                      value={draft.fields.pinpointEnd || ""}
+                      onChange={(e) =>
+                        updateField("pinpointEnd", e.target.value)
+                      }
+                      placeholder="e.g. 12"
+                    />
+                  </label>
+                </div>
+              </fieldset>
+            )}
+            {submitted && draftOutput.issues.length > 0 && (
+              <div className="validation" role="alert">
+                <strong>Check these details</strong>
+                <ul>
+                  {draftOutput.issues.map((issue) => (
+                    <li key={issue}>{issue}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <div className="draft-preview">
+              <span className="eyebrow">FULL CITATION PREVIEW</span>
+              {Object.values(draft.fields).some(
+                (v) =>
+                  v &&
+                  !["page", "paragraph", "Round (volume-based)"].includes(v),
+              ) ? (
+                <p
+                  className="citation-text"
+                  dangerouslySetInnerHTML={{ __html: draftOutput.html }}
+                />
+              ) : (
+                <p className="preview-placeholder">
+                  Your formatted citation will appear here.
+                </p>
+              )}
+              <small>
+                Repeat references are calculated in your footnote list.
+              </small>
+            </div>
+            <div className="form-actions">
+              <button
+                className="button primary"
+                type="submit"
+                disabled={!ready || lookupBusy}
+              >
+                {editing ? "Save changes" : "Add footnote"}{" "}
+                <span aria-hidden="true">→</span>
+              </button>
+              <button
+                type="button"
+                className="button subtle"
+                onClick={() => fresh(draft.type)}
+              >
+                {editing ? "Cancel" : "Reset fields"}
+              </button>
+            </div>
+          </form>
+        </section>
+        <section className="document-panel" aria-labelledby="footnotes-heading">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">YOUR DOCUMENT</p>
+              <h2 id="footnotes-heading">
+                Footnotes{" "}
+                <span className="count">{workspace.footnotes.length}</span>
+              </h2>
+            </div>
+            <button
+              className="button subtle"
+              disabled={!history.length}
+              onClick={undo}
+            >
+              ↶ Undo
+            </button>
+          </div>
+          <div className="document-toolbar">
+            <div className="view-toggle" aria-label="Footnote view">
+              <button
+                aria-pressed={!preview}
+                className={!preview ? "selected" : ""}
+                onClick={() => setPreview(false)}
+              >
+                Arrange
+              </button>
+              <button
+                aria-pressed={preview}
+                className={preview ? "selected" : ""}
+                onClick={() => setPreview(true)}
+              >
+                Preview
+              </button>
+            </div>
+            <label className="start-number">
+              Start at{" "}
+              <input
+                type="number"
+                min={1}
+                max={99999}
+                value={workspace.startNumber}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  if (Number.isInteger(n) && n > 0 && n <= 99999)
+                    change({ ...workspace, startNumber: n });
+                }}
+              />
+            </label>
+          </div>
+          {invalid > 0 && (
+            <div className="notice">
+              {invalid} {invalid === 1 ? "footnote needs" : "footnotes need"}{" "}
+              attention before export. Edit the flagged entries below.
+            </div>
+          )}
+          {!workspace.footnotes.length ? (
+            <div className="empty-document">
+              <div className="paper-symbol" aria-hidden="true">
+                <span>1</span>
+                <i />
+                <i />
+                <i />
+              </div>
+              <h3>
+                A considered argument
+                <br />
+                starts with a good source.
+              </h3>
+              <p>
+                Add your first source on the left.
+                <br />
+                We’ll take care of numbering and repeat references.
+              </p>
+              <button
+                className="text-button"
+                onClick={example}
+                disabled={!ready}
+              >
+                Try an example <span aria-hidden="true">↗</span>
+              </button>
+              <div className="empty-features">
+                <span>
+                  <i>Ibid</i> & <i>Id</i>
+                </span>
+                <span>
+                  Automatic <i>supra</i>
+                </span>
+                <span>Formatted copy</span>
+              </div>
+            </div>
+          ) : preview ? (
+            <ol className="reading-preview" start={workspace.startNumber}>
+              {outputs.map((o, i) => (
+                <li key={workspace.footnotes[i].id}>
+                  <p
+                    className="citation-text"
+                    dangerouslySetInnerHTML={{ __html: o.html }}
+                  />
+                  {o.issues.length > 0 && (
+                    <small className="error-text">{o.issues.join(" ")}</small>
+                  )}
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <DndContext
+              accessibility={{
+                announcements: {
+                  onDragStart: ({ active }) =>
+                    `Picked up footnote ${workspace.startNumber + workspace.footnotes.findIndex((n) => n.id === active.id)}.`,
+                  onDragOver: ({ over }) =>
+                    over
+                      ? `Moving over footnote ${workspace.startNumber + workspace.footnotes.findIndex((n) => n.id === over.id)}.`
+                      : "Moving outside the footnote list.",
+                  onDragEnd: ({ over }) =>
+                    over
+                      ? `Placed at footnote ${workspace.startNumber + workspace.footnotes.findIndex((n) => n.id === over.id)}.`
+                      : "Reordering cancelled.",
+                  onDragCancel: () => "Reordering cancelled.",
+                },
+              }}
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={dragEnd}
+            >
+              <SortableContext
+                items={workspace.footnotes.map((n) => n.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                <ol className="footnote-list" start={workspace.startNumber}>
+                  {workspace.footnotes.map((n, i) => (
+                    <FootnoteRow
+                      key={n.id}
+                      note={n}
+                      output={outputs[i]}
+                      number={i + workspace.startNumber}
+                      first={i === 0}
+                      last={i === workspace.footnotes.length - 1}
+                      onEdit={() => edit(n)}
+                      onRepeat={() => repeat(n)}
+                      onRemove={() => remove(n.id)}
+                      onMove={(direction) => move(i, i + direction)}
+                      onCopy={() => void copy(i)}
+                    />
+                  ))}
+                </ol>
+              </SortableContext>
+            </DndContext>
+          )}
+          <div className="export-panel">
+            <div className="export-heading">
+              <div>
+                <strong>Ready for your manuscript</strong>
+                <p>Copy keeps italics in compatible editors.</p>
+              </div>
+              <button
+                className="button primary"
+                disabled={!canExport}
+                onClick={() => void copy()}
+              >
+                Copy all
+              </button>
+            </div>
+            <div className="export-links">
+              <button
+                disabled={!canExport}
+                onClick={() =>
+                  downloadFile(
+                    exportHtml(outputs, workspace.startNumber, workspace.title),
+                    "sal-footnotes.html",
+                    "text/html",
+                  )
+                }
+              >
+                Download HTML ↗
+              </button>
+              <button
+                disabled={!canExport}
+                onClick={() =>
+                  downloadFile(
+                    exportText(outputs, workspace.startNumber),
+                    "sal-footnotes.txt",
+                    "text/plain",
+                  )
+                }
+              >
+                Download text ↓
+              </button>
+              <button
+                disabled={!workspace.footnotes.length}
+                className="clear-button"
+                onClick={() => {
+                  change({ ...workspace, footnotes: [] });
+                  fresh("case");
+                  setStatus("Footnotes cleared. Undo restores the list.");
+                }}
+              >
+                Clear list
+              </button>
+            </div>
+          </div>
+          <p className="document-note">
+            One source per footnote. Use free text for compound footnotes.
+          </p>
+        </section>
       </div>
-      <p className="text-sm font-semibold text-slate-700">No citations yet</p>
-      <p className="mt-1 max-w-xs text-xs text-slate-400">
-        Add a case URL or manual citation above. Citations auto-update with{' '}
-        <em>Ibid</em>, <em>Id</em>, and <em>supra</em> as you build your list.
-      </p>
-    </div>
+      <section className="style-notes" id="style-notes">
+        <div>
+          <p className="eyebrow">THE RULES BEHIND THE REFERENCES</p>
+          <h2>
+            A little precision.
+            <br />A lot less repetition.
+          </h2>
+        </div>
+        <div className="rule-explanations">
+          <details>
+            <summary>SAL academic footnotes</summary>
+            <p>
+              Based on the supplied SAL Style Guide Quick Reference, July 2007.
+              The same source and pinpoint immediately repeated becomes{" "}
+              <i>Ibid</i>. A changed pinpoint becomes <i>Id</i>. A later
+              reference points to its first full citation using <i>supra n</i>{" "}
+              (D–3.1–D–3.3). Reordering updates these references.
+            </p>
+          </details>
+          <details>
+            <summary>Reports, pinpoints and short names</summary>
+            <p>
+              Use the SLR report citation when available (C–1(b)). Paragraph
+              ranges use en dashes; older reports may need a page as well
+              (C–1(d)). Case short names are introduced with the first full
+              citation (C–1(e)). Lookup retrieves the case name, and does not
+              establish whether the case has been reported or remains good law.
+            </p>
+          </details>
+          <details>
+            <summary>How the SLR 2021 guide differs</summary>
+            <p>
+              The supplied Singapore Law Reports Style Guide 2021 covers
+              judgment writing. Its paragraph-based cross-references (2–1.5)
+              differ from academic footnotes. This workspace uses SAL academic
+              footnotes; SLR judgment paragraphs and SAL Annual Review paragraph
+              references are not automated.
+            </p>
+          </details>
+          <details>
+            <summary>Source coverage and your data</summary>
+            <p>
+              Structured forms cover cases, legislation, bound books, chapters,
+              legal journals and web articles. Use free text for treaties,
+              specialised foreign formats, scientific journals and other
+              exceptional sources. Free text is preserved and does not trigger
+              automatic short forms. Verify the source details before
+              publication.
+            </p>
+            <p>
+              Your workspace is saved in this browser. Only an explicit case
+              lookup sends a neutral citation to this app’s server and
+              eLitigation. Back up your workspace to move between devices or
+              protect against cleared browser data. HTML export preserves
+              formatting; it is a numbered list, not native Word footnotes.
+            </p>
+          </details>
+        </div>
+      </section>
+    </>
   );
 }
 
-function StatusIcon({ kind }: { kind: StatusKind }) {
-  if (kind === 'success')
-    return (
-      <svg className="h-3.5 w-3.5 shrink-0" viewBox="0 0 20 20" fill="currentColor">
-        <path
-          fillRule="evenodd"
-          d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z"
-          clipRule="evenodd"
-        />
-      </svg>
-    );
-  if (kind === 'error')
-    return (
-      <svg className="h-3.5 w-3.5 shrink-0" viewBox="0 0 20 20" fill="currentColor">
-        <path
-          fillRule="evenodd"
-          d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z"
-          clipRule="evenodd"
-        />
-      </svg>
-    );
-  if (kind === 'warn')
-    return (
-      <svg className="h-3.5 w-3.5 shrink-0" viewBox="0 0 20 20" fill="currentColor">
-        <path
-          fillRule="evenodd"
-          d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z"
-          clipRule="evenodd"
-        />
-      </svg>
-    );
+function FootnoteRow({
+  note,
+  output,
+  number,
+  first,
+  last,
+  onEdit,
+  onRepeat,
+  onRemove,
+  onMove,
+  onCopy,
+}: {
+  note: Footnote;
+  output: CitationOutput;
+  number: number;
+  first: boolean;
+  last: boolean;
+  onEdit: () => void;
+  onRepeat: () => void;
+  onRemove: () => void;
+  onMove: (d: number) => void;
+  onCopy: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: note.id });
   return (
-    <svg className="h-3.5 w-3.5 shrink-0" viewBox="0 0 20 20" fill="currentColor">
-      <path
-        fillRule="evenodd"
-        d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a.75.75 0 000 1.5h.253a.25.25 0 01.244.304l-.459 2.066A1.75 1.75 0 0010.747 15H11a.75.75 0 000-1.5h-.253a.25.25 0 01-.244-.304l.459-2.066A1.75 1.75 0 009.253 9H9z"
-        clipRule="evenodd"
+    <li
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={`footnote-row ${isDragging ? "dragging" : ""}`}
+    >
+      <div className="footnote-top">
+        <div className="footnote-identity">
+          <button
+            ref={setActivatorNodeRef}
+            className="drag-handle"
+            {...attributes}
+            {...listeners}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+                event.preventDefault();
+                onMove(event.key === "ArrowUp" ? -1 : 1);
+              }
+            }}
+            aria-roledescription="Reorder control. Use Up and Down arrow keys."
+            aria-label={`Reorder footnote ${number}`}
+            title="Drag, or use Up and Down arrow keys to reorder"
+          >
+            ⠿
+          </button>
+          <span className="footnote-number">
+            {number.toString().padStart(2, "0")}
+          </span>
+          <span className="source-label">
+            {sourceTypes.find((s) => s.type === note.type)?.label}
+          </span>
+        </div>
+        <span
+          className={`format-label ${output.issues.length ? "needs-attention" : ""}`}
+        >
+          {output.issues.length
+            ? "Needs attention"
+            : output.kind === "full"
+              ? "Full citation"
+              : output.kind === "manual"
+                ? "Free text"
+                : output.kind === "supra"
+                  ? "supra"
+                  : output.kind === "ibid"
+                    ? "Ibid"
+                    : "Id"}
+        </span>
+      </div>
+      <p
+        className="citation-text"
+        dangerouslySetInnerHTML={{
+          __html: output.html || "Incomplete citation",
+        }}
       />
-    </svg>
-  );
-}
-
-function PlusIcon() {
-  return (
-    <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-      <path d="M10.75 4.75a.75.75 0 00-1.5 0v4.5h-4.5a.75.75 0 000 1.5h4.5v4.5a.75.75 0 001.5 0v-4.5h4.5a.75.75 0 000-1.5h-4.5v-4.5z" />
-    </svg>
-  );
-}
-
-function CopyIcon() {
-  return (
-    <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-      <path d="M7 3.5A1.5 1.5 0 018.5 2h3.879a1.5 1.5 0 011.06.44l3.122 3.12A1.5 1.5 0 0117 6.622V12.5a1.5 1.5 0 01-1.5 1.5h-1v-3.379a3 3 0 00-.879-2.121L10.5 5.379A3 3 0 008.379 4.5H7v-1z" />
-      <path d="M4.5 6A1.5 1.5 0 003 7.5v9A1.5 1.5 0 004.5 18h7a1.5 1.5 0 001.5-1.5v-5.879a1.5 1.5 0 00-.44-1.06L9.44 6.439A1.5 1.5 0 008.378 6H4.5z" />
-    </svg>
-  );
-}
-
-function DragIndicatorIcon() {
-  return (
-    <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <circle cx="9" cy="5" r="1.5" />
-      <circle cx="9" cy="12" r="1.5" />
-      <circle cx="9" cy="19" r="1.5" />
-      <circle cx="15" cy="5" r="1.5" />
-      <circle cx="15" cy="12" r="1.5" />
-      <circle cx="15" cy="19" r="1.5" />
-    </svg>
+      {output.issues.length > 0 && (
+        <p className="error-text">{output.issues.join(" ")}</p>
+      )}
+      <div className="row-actions">
+        <button onClick={onEdit}>Edit</button>
+        <button onClick={onRepeat}>Cite again</button>
+        <button disabled={!!output.issues.length} onClick={onCopy}>
+          Copy
+        </button>
+        <span className="row-spacer" />
+        <button
+          disabled={first}
+          onClick={() => onMove(-1)}
+          aria-label={`Move footnote ${number} up`}
+        >
+          ↑
+        </button>
+        <button
+          disabled={last}
+          onClick={() => onMove(1)}
+          aria-label={`Move footnote ${number} down`}
+        >
+          ↓
+        </button>
+        <button
+          className="remove-button"
+          onClick={onRemove}
+          aria-label={`Remove footnote ${number}`}
+        >
+          Remove
+        </button>
+      </div>
+    </li>
   );
 }
